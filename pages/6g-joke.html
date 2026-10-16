@@ -1,0 +1,445 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>College_Free_WiFi</title>
+  <style>
+    /* ==========================================
+       Mobile-first responsive design for the captive portal.
+       Dark theme, single centered card, no external assets
+       (the hotspot has NO internet, so nothing can be fetched).
+       ========================================== */
+    :root {
+      --primary: #ff6b6b;
+      --secondary: #4ecdc4;
+      --accent: #ffe66d;
+      --bg: #0d1117;
+      --card: #161b22;
+      --text: #f8f8f2;
+      --muted: #7d8590;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 1rem;
+    }
+
+    /* Progress container */
+    #progress-container {
+      width: 100%;
+      max-width: 340px;
+      margin: 2rem 0;
+    }
+
+    #progress-bar {
+      width: 100%;
+      height: 12px;
+      background: var(--card);
+      border-radius: 6px;
+      overflow: hidden;
+      margin-bottom: 0.5rem;
+      position: relative;
+    }
+
+    #progress-fill {
+      height: 100%;
+      width: 0%;
+      background: var(--primary);
+      transition: width 0.5s ease-out;
+    }
+
+    #progress-text {
+      text-align: center;
+      font-size: 0.85rem;
+      color: var(--muted);
+      user-select: none;
+    }
+
+    /* Status lines - revealed one by one as the fake
+       progress advances (JS adds the .shown class) */
+    #status-lines {
+      display: flex;
+      flex-direction: column;
+      gap: 0.25rem;
+      margin-top: 0.5rem;
+      min-height: 5.5rem; /* reserve space so layout doesn't jump */
+    }
+
+    .status-line {
+      font-size: 0.75rem;
+      color: var(--muted);
+      user-select: none;
+      opacity: 0;
+      transform: translateY(4px);
+      transition: opacity 0.3s ease, transform 0.3s ease;
+    }
+
+    .status-line.shown {
+      opacity: 1;
+      transform: none;
+    }
+
+    .status-line.done::before {
+      content: "\2713 "; /* checkmark once "completed" */
+      color: var(--secondary);
+    }
+
+    /* Fake speed-test result card ("6G: 0.0 Mbps") */
+    #speed-result {
+      margin: 1.5rem 0;
+      padding: 1rem;
+      background: var(--card);
+      border-radius: 8px;
+      display: none;
+      align-items: baseline;
+      justify-content: center;
+      gap: 0.5rem;
+    }
+
+    #speed-result.visible {
+      display: flex;
+      animation: pop-in 0.4s cubic-bezier(0.34, 1.56, 0.64, 1) both;
+    }
+
+    @keyframes pop-in {
+      from { transform: scale(0.8); opacity: 0; }
+      to   { transform: scale(1); opacity: 1; }
+    }
+
+    /* The "6G" badge - sets up the punchline */
+    #speed-label {
+      font-size: 0.9rem;
+      font-weight: bold;
+      color: var(--secondary);
+      letter-spacing: 0.05em;
+    }
+
+    #speed-value {
+      font-size: 1.75rem;
+      font-weight: bold;
+      color: var(--muted);
+    }
+
+    #speed-unit {
+      font-size: 0.9rem;
+      color: var(--muted);
+    }
+
+    /* Punchline */
+    #punchline {
+      text-align: center;
+      margin: 2rem 0;
+    }
+
+    #punchline-text {
+      font-size: 1.25rem;
+      font-weight: bold;
+      color: var(--accent);
+      min-height: 1.5em;
+    }
+
+    /* Cosmetic visit counter - the number inside is injected
+       by server.py on each request */
+    #visit-counter {
+      margin-top: 1.5rem;
+      text-align: center;
+      font-size: 0.75rem;
+      color: var(--muted);
+      min-height: 1em;
+    }
+
+    /* Confetti canvas - full-screen overlay */
+    #confetti-canvas {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      pointer-events: none;
+      z-index: 100;
+    }
+
+    /* Try Again button */
+    #try-again {
+      margin-top: 2rem;
+      padding: 0.875rem 1.75rem;
+      background: var(--primary);
+      color: white;
+      border: none;
+      border-radius: 6px;
+      font-size: 1rem;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+
+    #try-again:hover {
+      background: #ff5252;
+    }
+
+    /* Shake animation for the punchline */
+    .shake {
+      animation: shake 0.5s cubic-bezier(0.36, 0.07, 0.19, 0.97) both;
+    }
+
+    @keyframes shake {
+      0%   { transform: rotate(0deg); }
+      25%  { transform: rotate(-5deg); }
+      50%  { transform: rotate(5deg); }
+      75%  { transform: rotate(-3deg); }
+      100% { transform: rotate(0deg); }
+    }
+
+    /* Respect users who ask for less motion */
+    @media (prefers-reduced-motion: reduce) {
+      #progress-fill { transition: width 0s; }
+      .shake { animation: none; }
+      #speed-result.visible { animation: none; }
+    }
+  </style>
+</head>
+<body>
+  <!-- Confetti canvas (full-screen overlay) -->
+  <canvas id="confetti-canvas"></canvas>
+
+  <!-- Fake "Connecting to WiFi..." progress bar.
+       JS makes it race up, then STALL just under 100%. -->
+  <div id="progress-container">
+    <div id="progress-bar">
+      <div id="progress-fill"></div>
+    </div>
+    <div id="progress-text">Connecting to WiFi...</div>
+  </div>
+
+  <!-- Fake status lines, revealed one at a time -->
+  <div id="status-lines">
+    <div class="status-line">Authenticating with college network...</div>
+    <div class="status-line">Obtaining IP address...</div>
+    <div class="status-line">Establishing secure connection...</div>
+    <div class="status-line">Finalizing handshake...</div>
+  </div>
+
+  <!-- Fake speed test result: "6G: 0.0 Mbps" -->
+  <div id="speed-result">
+    <span id="speed-label">6G:</span>
+    <span id="speed-value">0.0</span>
+    <span id="speed-unit">Mbps</span>
+  </div>
+
+  <!-- Punchline (revealed with a shake after the speed result) -->
+  <div id="punchline">
+    <div id="punchline-text">&nbsp;</div>
+  </div>
+
+  <!-- Try Again button: shows a different random joke line each click -->
+  <button id="try-again">Try Again</button>
+
+  <!-- Cosmetic visit counter. server.py replaces the marker below with
+       "You are visitor #N today" on every request. Nothing is stored. -->
+  <div id="visit-counter"><!-- VISIT_COUNTER_PLACEHOLDER --></div>
+
+  <script>
+    // ==========================================
+    // Joke lines: "Try Again" picks a DIFFERENT
+    // random line from this array on every click.
+    // The punchline below is the opener, not in the array.
+    // ==========================================
+    const jokeLines = [
+      "Our college WiFi is basically 5G... edged with a stick.",
+      "We're still waiting for the 6G spectrum license from 2018.",
+      "Signal strength: 'Hope you like 3G speeds!'",
+      "6G is just 5G with a fresh coat of paint.",
+      "Ask IT: they're 'working on it' since 2020.",
+      "Our network is so slow, DNS resolves asynchronously.",
+      "Congrats! You're on the guest network. Good luck!",
+      "The only thing getting 6G here is the student loan debt."
+    ];
+
+    const PUNCHLINE = "Do you even think our college has 6G?";
+    let lastJokeIndex = -1; // ensures no line repeats twice in a row
+
+    // NOTE: the "You are visitor #N today" text is injected server-side
+    // by server.py at the visit-counter placeholder in the HTML below.
+    // This page collects, stores and logs NOTHING about the visitor.
+    // There is no login form; no credentials are ever requested.
+
+    // ==========================================
+    // Confetti system (simple canvas particles)
+    // ==========================================
+    const canvas = document.getElementById('confetti-canvas');
+    const ctx = canvas.getContext('2d');
+    let animationId = null;
+    let confetti = [];
+
+    const colors = ['#ff6b6b', '#4ecdc4', '#ffe66d', '#ffa726', '#5f27cd'];
+
+    // rAF with fallbacks for older captive-portal webviews
+    const requestFrame = window.requestAnimationFrame
+      ? window.requestAnimationFrame.bind(window)
+      : function (cb) { return setTimeout(cb, 1000 / 60); };
+
+    function resizeCanvas() {
+      canvas.width = window.innerWidth;
+      canvas.height = window.innerHeight;
+    }
+    resizeCanvas();
+    window.addEventListener('resize', resizeCanvas);
+
+    function createPiece(x, y, color) {
+      return {
+        width: Math.random() * 10 + 5,
+        height: Math.random() * 10 + 5,
+        color: color,
+        x: x,
+        y: y,
+        angle: Math.random() * 360,
+        rotationSpeed: (Math.random() - 0.5) * 10,
+        fallSpeed: Math.random() * 5 + 2
+      };
+    }
+
+    function drawConfetti() {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+      for (let i = confetti.length - 1; i >= 0; i--) {
+        const piece = confetti[i];
+        piece.y += piece.fallSpeed;
+        piece.angle += piece.rotationSpeed;
+
+        ctx.save();
+        ctx.translate(piece.x + piece.width / 2, piece.y + piece.height / 2);
+        ctx.rotate((piece.angle * Math.PI) / 180);
+        ctx.fillStyle = piece.color;
+        ctx.fillRect(-piece.width / 2, -piece.height / 2, piece.width, piece.height);
+        ctx.restore();
+
+        if (piece.y > canvas.height) {
+          confetti.splice(i, 1); // recycle pieces that fall off screen
+        }
+      }
+
+      if (confetti.length > 0) {
+        animationId = requestFrame(drawConfetti);
+      } else {
+        animationId = null;
+      }
+    }
+
+    function launchConfetti() {
+      const centerX = canvas.width / 2;
+      const centerY = canvas.height / 2;
+
+      for (let i = 0; i < 50; i++) {
+        const color = colors[Math.floor(Math.random() * colors.length)];
+        const piece = createPiece(centerX, centerY, color);
+        const angle = (i / 50) * Math.PI * 2; // burst in a circle
+        const radius = 20;
+        piece.x = centerX + Math.cos(angle) * radius;
+        piece.y = centerY + Math.sin(angle) * radius;
+        confetti.push(piece);
+      }
+
+      if (!animationId) {
+        drawConfetti();
+      }
+    }
+
+    // ==========================================
+    // Fake connection progress
+    // - races up quickly, then gets STUCK at ~97%
+    // - status lines appear one by one on the way up
+    // - after a stall, the speed result + punchline are revealed
+    // ==========================================
+    const STUCK_AT = 97;   // where the bar freezes
+    const STALL_MS = 2500; // how long it stays frozen before the reveal
+    const statusEls = Array.from(document.querySelectorAll('.status-line'));
+
+    function updateProgress(percent) {
+      document.getElementById('progress-fill').style.width = percent + '%';
+      document.getElementById('progress-text').textContent =
+        `Connecting to WiFi... ${Math.floor(percent)}%`;
+
+      // Reveal status lines as progress passes evenly spaced milestones
+      const step = 100 / (statusEls.length + 1);
+      statusEls.forEach((el, i) => {
+        if (percent >= step * (i + 1)) el.classList.add('shown', 'done');
+      });
+    }
+
+    function simulateConnection() {
+      let percent = 0;
+      updateProgress(percent);
+
+      const interval = setInterval(() => {
+        percent += Math.random() * 12 + 4;
+        if (percent >= STUCK_AT) {
+          percent = STUCK_AT;
+          clearInterval(interval);
+          // The stall: text switches to "Still connecting..." forever
+          document.getElementById('progress-text').textContent =
+            `Still connecting... ${STUCK_AT}%`;
+          statusEls.forEach(el => el.classList.add('shown'));
+
+          // ...until the joke is revealed
+          setTimeout(() => {
+            document.getElementById('progress-text').textContent = 'Connection failed.';
+            showSpeedResult();
+            showPunchline(PUNCHLINE);
+            launchConfetti();
+          }, STALL_MS);
+        }
+        updateProgress(percent);
+      }, 250);
+    }
+
+    // ==========================================
+    // Reveal the fake speed test result: "6G: 0.0 Mbps"
+    // ==========================================
+    function showSpeedResult() {
+      document.getElementById('speed-result').classList.add('visible');
+    }
+
+    // ==========================================
+    // Show a punchline with a shake animation
+    // ==========================================
+    function showPunchline(text) {
+      const el = document.getElementById('punchline-text');
+      el.textContent = text;
+      // Restart the shake cleanly so it replays every time
+      el.classList.remove('shake');
+      void el.offsetWidth; // force reflow
+      el.classList.add('shake');
+    }
+
+    // ==========================================
+    // Try Again button: different random line every click
+    // ==========================================
+    document.getElementById('try-again').addEventListener('click', () => {
+      let index;
+      do {
+        index = Math.floor(Math.random() * jokeLines.length);
+      } while (jokeLines.length > 1 && index === lastJokeIndex);
+      lastJokeIndex = index;
+
+      showPunchline(jokeLines[index]);
+      launchConfetti();
+    });
+
+    // ==========================================
+    // Kick off the fake connection sequence
+    // ==========================================
+    window.addEventListener('load', simulateConnection);
+  </script>
+</body>
+</html>
